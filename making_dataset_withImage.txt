@@ -1,0 +1,82 @@
+from PIL import Image, ImageSequence
+import os
+import json
+import random
+
+# ================================
+# INPUT TIFF FOLDER
+# ================================
+tiff_folder = r"C:\Users\pgupta\Desktop\MS\Image_20260220_Top1-19"
+
+# ================================
+# OUTPUT DATASET FOLDER
+# ================================
+output_dataset_folder = r"C:\Users\pgupta\Desktop\Home_health_coding\dataset"
+output_images_folder = os.path.join(output_dataset_folder, "images")
+
+# Create folders automatically
+os.makedirs(output_images_folder, exist_ok=True)
+
+# ================================
+# PAGE CLASSES
+# ================================
+classes = [
+    "CHECK_PAGE",
+    "SERVICE_LINE_PAGE",
+    "CLAIM_PAGE"
+]
+
+dataset = []
+img_count = 0
+
+# ================================
+# LOOP THROUGH TIFF FILES
+# ================================
+for file in os.listdir(tiff_folder):
+
+    if file.lower().endswith((".tif", ".tiff")):
+
+        tiff_path = os.path.join(tiff_folder, file)
+
+        try:
+            tiff = Image.open(tiff_path)
+
+            # Iterate through pages
+            for page_num, page in enumerate(ImageSequence.Iterator(tiff)):
+
+                page = page.convert("RGB")
+
+                # Image save path
+                img_name = f"{os.path.splitext(file)[0]}_page_{page_num}.png"
+                img_path = os.path.join(output_images_folder, img_name)
+
+                page.save(img_path)
+
+                # Random label (dummy dataset)
+                label = random.choice(classes)
+
+                sample = {
+                    "image": img_path,
+                    "instruction": "Classify this EOB page.",
+                    "output": label
+                }
+
+                dataset.append(sample)
+
+                img_count += 1
+
+        except Exception as e:
+            print(f"Error processing {file}: {e}")
+
+# ================================
+# SAVE JSON DATASET
+# ================================
+json_path = os.path.join(output_dataset_folder, "data.json")
+
+with open(json_path, "w") as f:
+    json.dump(dataset, f, indent=4)
+
+print("===================================")
+print(f"Finished! {img_count} pages extracted.")
+print(f"Dataset saved at: {json_path}")
+print("===================================")
