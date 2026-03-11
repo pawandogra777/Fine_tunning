@@ -348,3 +348,10 @@ Sequences per parameter	Meaning
 0.1 – 1		Acceptable
 1 – 10		Good training
 10+		Very strong training
+
+Sequences per parameter		Meaning		Sequences needed	Pages needed (≈)
+< 0.01				Very bad	< 153,354		< 153k pages
+0.01 – 0.1			Weak learning	153k – 1.53M		153k – 1.53M pages
+0.1 – 1				Acceptable	1.53M – 15.3M		1.53M – 15.3M pages
+1 – 10				Good training	15.3M – 153M		15.3M – 153M pages
+10+				Very strong	153M+			153M+ pages
