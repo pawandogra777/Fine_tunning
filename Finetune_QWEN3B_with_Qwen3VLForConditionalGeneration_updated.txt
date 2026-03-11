@@ -1,0 +1,350 @@
+###For fine tune requirement
+
+!pip install transformers datasets peft accelerate bitsandbytes pillow
+	Transformer= run LLM model and vision model
+	PEFT (Parameter effecient finetunning)= It use effecient fine tunning for large model
+	Accelerate= It make model training easy for GPU, it manage GPU and CPU automatically
+	Bitsandbytes= Model ko 4 bit and 8 bit mai load karne k liye
+	Pillow = it is used for read and process th eimage
+	Pytorch = AI model bnane or train karne ka tool
+	
+!pip install transformers accelerate torch
+
+
+########download and Load model
+	Qwen3VLForConditionalGeneration- jo specifically Qwen3-VL-8B-Instruct ko load karne ke liye bani hai
+	AutoProcesso- Processor ka kaam hai input ko model ke format me convert karna.convert text to token, image ko tensor mai convert karta hai
+
+###################PEFT (Parameter-Efficient Fine-Tuning)
+If model weight is 8B parameter, PEFT allow training only a small subset of etar parameters
+LORA= Instead of updating full weight matrices, you add small low-rank matrices to some layers.
+LORA Configuration:
+r=16 = dimension
+Lora_alpha=32
+########################requirement and code
+!pip install transformers datasets peft accelerate bitsandbytes pillow
+!pip install transformers accelerate torch
+
+for download
+import torch
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+
+# HuggingFace model name
+model_name = "Qwen/Qwen3-VL-8B-Instruct"
+# /lambda/nfs/NDS1/EOB/EOB_1/IP
+# where you want to save it
+save_path = "/lambda/nfs/NDS1/EOB/EOB_1/models/Qwen3-VL-8B-Instruct"
+
+print("Downloading model...")
+
+#for donloading the model 
+#from_pretrained download weights, download config, load model
+#torch.float16= Ye model ko half precision (16-bit) me load karta hai.
+# device_map="auto"= Ye automatically decide karta hai model kaha load hoga.
+model = Qwen3VLForConditionalGeneration.from_pretrained(
+    model_name,
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+
+processor = AutoProcessor.from_pretrained(model_name)
+
+print("Saving model locally...")
+
+model.save_pretrained(save_path)
+processor.save_pretrained(save_path)
+
+print("Model saved successfully at:", save_path)
+
+
+###for loading
+import torch
+from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+
+model_path = "/lambda/nfs/NDS1/EOB/EOB_1/models/Qwen3-VL-8B-Instruct"
+#  local_files_only=True= load locally
+model = Qwen3VLForConditionalGeneration.from_pretrained(
+    model_path,
+    torch_dtype=torch.float16,
+    device_map="auto",
+    local_files_only=True
+)
+
+processor = AutoProcessor.from_pretrained(
+    model_path,
+    local_files_only=True
+)
+
+model.eval()
+
+print("Model loaded successfully")
+
+###########datset
+from datasets import load_dataset
+
+dataset = load_dataset(
+    "json",
+    data_files=r"/lambda/nfs/NDS1/EOB/EOB_1/dataset/data.json"
+    
+)
+print(dataset)
+
+##############conver dtaa into model training
+
+from transformers import AutoProcessor
+from PIL import Image
+
+# load processor first
+processor = AutoProcessor.from_pretrained(
+    model_path,
+    local_files_only=True
+)
+
+from PIL import Image
+
+def format_data(example):
+
+    image = Image.open(example["image"]).convert("RGB")
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": example["instruction"]}
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": example["output"]}
+            ]
+        }
+    ]
+###add_generation_prompt = modle ko answer genartae karna hai aya nhi
+    text = processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=False
+    )
+
+    return {
+        "text": text,
+        "image_path": example["image"]
+    }
+dataset = dataset["train"].map(
+    format_data,
+    remove_columns=["image", "instruction", "output"]
+)
+
+# {
+#  "image": "page1.png",
+#  "instruction": "Extract patient name",
+#  "output": "John Smith"
+# }
+
+
+
+
+
+#fine tuning with peft
+from peft import LoraConfig, get_peft_model
+
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj","k_proj","v_proj","o_proj"],
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+###get_peft_model sirf model ko LoRA ke saath prepare karta hai
+#Ye weights ko initialize karta hai, lekin abhi backpropagation ya optimizer se train nahi kiya
+#Matlab model abhi fine-tuning ke liye ready hai, par trained nahi hai
+model = get_peft_model(model, lora_config)
+
+model.print_trainable_parameters()
+
+
+############ave memory
+model.gradient_checkpointing_enable()
+model.enable_input_require_grads()
+# model.print_trainable_parameters()
+
+
+##########how youtrain your model
+from transformers import TrainingArguments
+
+# training_args = TrainingArguments(
+#     output_dir="./qwen_finetuned",
+#     per_device_train_batch_size=1,
+#     gradient_accumulation_steps=4,
+#     num_train_epochs=3,
+#     logging_steps=1,
+#     save_steps=50,
+#     learning_rate=2e-4,
+#     fp16=True,
+#     remove_unused_columns=False
+# )
+
+########aftyer reduction
+training_args = TrainingArguments(
+    output_dir="./qwen_finetuned",# ouput path
+    per_device_train_batch_size=1,# GPU par ektime maikitne sammple hoge batch size
+    gradient_accumulation_steps=8,#1 step me GPU memory kam lage → 8 steps ke gradients accumulate karke ek update karenge
+    num_train_epochs=3,#Poore dataset ko 3 baar train karega
+    learning_rate=2e-4,#Gradient step size → training kitni fast ya slow hogi
+    fp16=True,
+    remove_unused_columns=False,
+    gradient_checkpointing=True
+)
+
+######it prepare batch form dataset
+from PIL import Image
+
+def collate_fn(batch):
+
+    texts = [item["text"] for item in batch]
+
+    images = [
+        Image.open(item["image_path"]).convert("RGB").resize((448,448))
+        for item in batch
+    ]
+
+    # inputs = processor(
+    #     text=texts,
+    #     images=images,
+    #     padding=True,
+    #     return_tensors="pt"
+    # )
+    inputs = processor(
+    text=texts,
+    images=images,
+    padding=True,
+    truncation=True,
+    max_length=512,
+    return_tensors="pt"
+)
+
+    inputs["labels"] = inputs["input_ids"]
+
+    return inputs
+
+
+####final yaha fine tune ho rha hai
+from transformers import Trainer
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    data_collator=collate_fn
+)
+
+trainer.train()
+
+
+#####model save
+trainer.save_model("qwen_eob_finetuned")
+processor.save_pretrained("qwen_eob_finetuned")
+
+
+
+############tets model
+# TEST THE MODEL
+image = Image.open("/lambda/nfs/NDS1/EOB/EOB_1/dataset/images/E2102LYE00003001_page_0.png")
+
+messages = [
+    {
+        "role": "user",
+        "content":[
+            {"type":"image","image":image},
+            {"type":"text","text":"Classify this EOB page"}
+        ]
+    }
+]
+
+text = processor.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True
+)
+
+inputs = processor(
+    text=[text],
+    images=[image],
+    return_tensors="pt"
+).to(model.device)
+
+output = model.generate(**inputs, max_new_tokens=50)
+
+generated_ids = output[:, inputs.input_ids.shape[-1]:]
+
+response = processor.decode(
+    generated_ids[0],
+    skip_special_tokens=True
+)
+
+print(response)
+
+
+########check pint
+A checkpoint is a snapshot of your model during training at a certain step.
+It saves:
+
+Model weights (pytorch_model.bin)
+Optimizer state (optimizer.pt)
+Trainer state (trainer_state.json)
+Configuration (config.json)
+
+
+#########You can resume training from that checkpoint using:
+trainer.train(resume_from_checkpoint="qwen_finetuned/checkpoint-148")
+
+##########You can use any checkpoint to generate outputs, because it contains the model weights at that point.
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoFeatureExtractor, QwenProcessor
+
+checkpoint_path = "/lambda/nfs/NDS1/EOB/EOB_1/qwen_finetuned/checkpoint-148"
+
+# Load model and processor
+model = AutoModelForCausalLM.from_pretrained(checkpoint_path, torch_dtype=torch.float16, device_map="auto")
+tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+feature_extractor = AutoFeatureExtractor.from_pretrained(checkpoint_path)
+processor = QwenProcessor(tokenizer=tokenizer, feature_extractor=feature_extractor)
+
+# Now you can do output generation like normal
+
+
+########training result
+Step 	Training Loss
+
+TrainOutput(global_step=222, training_loss=7.912986961570946, metrics={'train_runtime': 929.5601, 'train_samples_per_second': 1.901, 'train_steps_per_second': 0.239, 'total_flos': 1.879629087453408e+16, 'train_loss': 7.912986961570946, 'epoch': 3.0})
+
+
+
+
+########how many training example
+800 pages → depends on tokens per page.
+
+Let’s estimate:
+
+Assume ~500 tokens per page (reasonable for dense text).
+
+800 pages×500 tokens/page=400,000 tokens
+
+If you use sequence length = 512 tokens, then number of training sequences is roughly:
+
+num sequences≈400,000/512≈780
+
+So you only have ~780 training sequences to update 15 million parameters.
+
+780/15,335,424≈0.0000509
+Each parameter sees only ~0.00005 sequences per epoch.
+
+Simple Rule (Practical ML Guideline)
+Sequences per parameter	Meaning
+< 0.01		Very bad (data too small)
+0.01 – 0.1	Weak learning
+0.1 – 1		Acceptable
+1 – 10		Good training
+10+		Very strong training
